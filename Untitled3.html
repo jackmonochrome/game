@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ultimate Car River Game - Detailed Edition</title>
+    <style>
+        #gameCanvas, #selectionCanvas { border: 1px solid black; display: block; margin: 10px auto; background: #87CEEB; }
+        body { margin: 0; padding: 0; overflow: hidden; font-family: Arial, sans-serif; background: #333; touch-action: none; }
+        #info { position: absolute; top: 10px; left: 10px; color: white; text-shadow: 1px 1px 2px black; }
+        #selectionCanvas { background: #555; }
+        #powerBar { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 200px; height: 20px; background: gray; border: 1px solid white; }
+        #powerLevel { height: 100%; background: red; width: 0%; }
+        #resultWindow { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 0, 0.8); color: white; padding: 20px; text-align: center; font-size: 24px; display: none; }
+        .blink-red { animation: blink 0.5s infinite; }
+        @keyframes blink { 50% { color: red; } }
+        #restartButton { position: absolute; top: 20px; right: 20px; padding: 10px; background: #ff4444; color: white; border: none; cursor: pointer; }
+        #restartButton:hover { background: #cc0000; }
+        #startZone { position: absolute; left: 50%; transform: translateX(-50%); bottom: 60px; width: 100px; height: 20px; background: green; text-align: center; color: white; font-size: 14px; display: none; }
+        #startZone span { position: absolute; top: -20px; left: 50%; transform: translateX(-50%); }
+    </style>
+    <script>
+        // Определяем, мобильное устройство или десктоп
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        const canvasWidth = isMobile ? window.innerWidth : 400;
+        const canvasHeight = isMobile ? window.innerHeight : 800;
+        const FRICTION = 0.98, RIVER_HEIGHT = canvasHeight * 0.05, CLIFF_Y = RIVER_HEIGHT, ROCK_WIDTH = canvasWidth * 0.02;
+        const NON_PLAYABLE_HEIGHT = canvasHeight * 0.25, PLAYABLE_HEIGHT = canvasHeight - NON_PLAYABLE_HEIGHT, START_Y = PLAYABLE_HEIGHT - 50;
+        const MAX_DISTANCE = PLAYABLE_HEIGHT - CLIFF_Y;
+
+        const gameCanvas = document.getElementById('gameCanvas');
+        gameCanvas.width = canvasWidth;
+        gameCanvas.height = canvasHeight;
+        const gameCtx = gameCanvas.getContext('2d');
+        const selCanvas = document.getElementById('selectionCanvas');
+        selCanvas.width = canvasWidth;
+        selCanvas.height = isMobile ? 100 : 150;
+        const selCtx = selCanvas.getContext('2d');
+        const info = document.getElementById('info');
+        const score1Display = document.getElementById('score1');
+        const score2Display = document.getElementById('score2');
+        const powerBar = document.getElementById('powerLevel');
+        const resultWindow = document.getElementById('resultWindow');
+        const restartButton = document.getElementById('restartButton');
+        const startZone = document.getElementById('startZone');
+        startZone.style.width = `${canvasWidth * 0.25}px`;
+        startZone.innerHTML = '<span>Start</span>';
+
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContext();
+
+        function playSound(frequency, duration) {
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.type = 'sawtooth';
+            oscillator.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.5, audioCtx.currentTime + duration);
+            gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration);
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + duration);
+        }
+
+        function startBackgroundMusic() {
+            const baseFreq = 261.63, scale = [baseFreq, baseFreq * 1.122, baseFreq * 1.26, baseFreq * 1.335, baseFreq * 1.498, baseFreq * 1.682, baseFreq * 1.89];
+            let currentNote = 0;
+            function playNextNote() {
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.type = 'sine';
+                oscillator.frequency.value = scale[currentNote];
+                gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 1);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 1);
+                currentNote = (currentNote + Math.floor(Math.random() * 3) - 1 + scale.length) % scale.length;
+                setTimeout(playNextNote, 500 + Math.random() * 500);
+            }
+            playNextNote();
+        }
+
+        document.addEventListener('click', () => {
+            if (audioCtx.state === 'suspended') audioCtx.resume().then(() => startBackgroundMusic());
+        }, { once: true });
+
+        function drawSpeedCar(ctx, car) {
+            ctx.save();
+            ctx.translate(car.x, car.y);
+            ctx.scale(car.scale, car.scale);
+            const gradient = ctx.createLinearGradient(-car.width / 2, 0, car.width / 2, 0);
+            gradient.addColorStop(0, car.color === 'yellow' ? '#FFD700' : '#006400');
+            gradient.addColorStop(1, car.color === 'yellow' ? '#FFFF00' : '#00FF00');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.moveTo(-car.width / 2, -car.height / 2);
+            ctx.lineTo(car.width / 2 - 5, -car.height / 2);
+            ctx.quadraticCurveTo(car.width / 2, -car.height / 4, car.width / 2, 0);
+            ctx.lineTo(car.width / 2, car.height / 2);
+            ctx.lineTo(-car.width / 2, car.height / 2);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.fillRect(-car.width / 3, -car.height / 4, car.width / 1.5, car.height / 3);
+            ctx.fillStyle = 'white';
+            ctx.fillRect(-car.width / 4, -car.height / 6, car.width / 2, 5);
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(-car.width / 2 + 5, -car.height / 2 - 5, 5, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 10, -car.height / 2 - 5, 5, 0, Math.PI * 2);
+            ctx.arc(-car.width / 2 + 5, car.height / 2 + 5, 5, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 10, car.height / 2 + 5, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'silver';
+            ctx.beginPath();
+            ctx.arc(-car.width / 2 + 5, -car.height / 2 - 5, 3, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 10, -car.height / 2 - 5, 3, 0, Math.PI * 2);
+            ctx.arc(-car.width / 2 + 5, car.height / 2 + 5, 3, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 10, car.height / 2 + 5, 3, 0, Math.PI * 2);
+            ctx.fill();
+            if (car.hits === 1) { car.updateFireParticles(); car.drawFireParticles(ctx); }
+            ctx.restore();
+        }
+
+        function drawTruckCar(ctx, car) {
+            ctx.save();
+            ctx.translate(car.x, car.y);
+            ctx.scale(car.scale, car.scale);
+            const gradient = ctx.createLinearGradient(0, -car.height / 2, 0, car.height / 2);
+            gradient.addColorStop(0, car.color === 'yellow' ? '#FFD700' : '#006400');
+            gradient.addColorStop(1, car.color === 'yellow' ? '#FFFF00' : '#00FF00');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.moveTo(-car.width / 2, -car.height / 2);
+            ctx.lineTo(car.width / 2, -car.height / 2);
+            ctx.lineTo(car.width / 2, car.height / 2 - 5);
+            ctx.lineTo(car.width / 2 - 10, car.height / 2);
+            ctx.lineTo(-car.width / 2, car.height / 2);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.fillRect(-car.width / 2 + 5, -car.height / 2 + 5, car.width / 3, car.height / 2);
+            ctx.fillStyle = 'silver';
+            ctx.fillRect(-car.width / 2 + 7, -car.height / 2 + 7, car.width / 3 - 4, car.height / 2 - 4);
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(-car.width / 2 + 10, -car.height / 2 - 5, 5, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 10, -car.height / 2 - 5, 5, 0, Math.PI * 2);
+            ctx.arc(-car.width / 2 + 10, car.height / 2 + 5, 5, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 10, car.height / 2 + 5, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'gray';
+            ctx.fillRect(-car.width / 2, car.height / 2 - 5, 5, 2);
+            ctx.fillRect(-car.width / 2 + 7, car.height / 2 - 5, 5, 2);
+            if (car.hits === 1) { car.updateFireParticles(); car.drawFireParticles(ctx); }
+            ctx.restore();
+        }
+
+        function drawBuggyCar(ctx, car) {
+            ctx.save();
+            ctx.translate(car.x, car.y);
+            ctx.scale(car.scale, car.scale);
+            const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, car.width / 2);
+            gradient.addColorStop(0, car.color === 'yellow' ? '#FFFF00' : '#00FF00');
+            gradient.addColorStop(1, car.color === 'yellow' ? '#FFD700' : '#006400');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.moveTo(-car.width / 2, -car.height / 2);
+            ctx.lineTo(car.width / 2, -car.height / 2);
+            ctx.quadraticCurveTo(car.width / 2 - 5, 0, car.width / 2, car.height / 2);
+            ctx.lineTo(-car.width / 2, car.height / 2);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(0, -car.height / 4, car.width / 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'silver';
+            ctx.beginPath();
+            ctx.arc(0, -car.height / 4, car.width / 3 - 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(-car.width / 2 + 5, -car.height / 2 - 5, 6, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 5, -car.height / 2 - 5, 6, 0, Math.PI * 2);
+            ctx.arc(-car.width / 2 + 5, car.height / 2 + 5, 6, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 5, car.height / 2 + 5, 6, 0, Math.PI * 2);
+            ctx.fill();
+            if (car.hits === 1) { car.updateFireParticles(); car.drawFireParticles(ctx); }
+            ctx.restore();
+        }
+
+        function drawTankCar(ctx, car) {
+            ctx.save();
+            ctx.translate(car.x, car.y);
+            ctx.scale(car.scale, car.scale);
+            const gradient = ctx.createLinearGradient(-car.width / 2, 0, car.width / 2, 0);
+            gradient.addColorStop(0, car.color === 'yellow' ? '#FFD700' : '#006400');
+            gradient.addColorStop(1, car.color === 'yellow' ? '#FFFF00' : '#00FF00');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.moveTo(-car.width / 2, -car.height / 2);
+            ctx.lineTo(car.width / 2, -car.height / 2);
+            ctx.lineTo(car.width / 2, car.height / 2);
+            ctx.lineTo(-car.width / 2 + 5, car.height / 2);
+            ctx.lineTo(-car.width / 2, car.height / 2 - 5);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.fillRect(-car.width / 4, -car.height / 3, car.width / 2, car.height / 6);
+            ctx.fillStyle = 'gray';
+            ctx.fillRect(car.width / 2 - 10, -car.height / 4, 10, 5);
+            ctx.beginPath();
+            ctx.arc(-car.width / 2 + 5, -car.height / 2 - 5, 6, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 5, -car.height / 2 - 5, 6, 0, Math.PI * 2);
+            ctx.arc(-car.width / 2 + 5, car.height / 2 + 5, 6, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 5, car.height / 2 + 5, 6, 0, Math.PI * 2);
+            ctx.fill();
+            if (car.hits === 1) { car.updateFireParticles(); car.drawFireParticles(ctx); }
+            ctx.restore();
+        }
+
+        function drawSportsCar(ctx, car) {
+            ctx.save();
+            ctx.translate(car.x, car.y);
+            ctx.scale(car.scale, car.scale);
+            const gradient = ctx.createLinearGradient(-car.width / 2, 0, car.width / 2, 0);
+            gradient.addColorStop(0, car.color === 'yellow' ? '#FFD700' : '#006400');
+            gradient.addColorStop(1, car.color === 'yellow' ? '#FFFF00' : '#00FF00');
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.moveTo(-car.width / 2, -car.height / 2);
+            ctx.lineTo(car.width / 2 - 10, -car.height / 2);
+            ctx.quadraticCurveTo(car.width / 2, -car.height / 4, car.width / 2, 0);
+            ctx.lineTo(car.width / 2, car.height / 2);
+            ctx.lineTo(-car.width / 2, car.height / 2);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.fillRect(car.width / 2 - 15, -car.height / 2 - 5, 10, 2);
+            ctx.fillRect(car.width / 2 - 15, -car.height / 2 - 5, 2, 5);
+            const windowGradient = ctx.createLinearGradient(0, -car.height / 4, 0, car.height / 4);
+            windowGradient.addColorStop(0, '#333333');
+            windowGradient.addColorStop(0.3, '#666666');
+            windowGradient.addColorStop(1, '#333333');
+            ctx.fillStyle = windowGradient;
+            ctx.fillRect(-car.width / 3, -car.height / 4, car.width / 1.5, car.height / 3);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.fillRect(-car.width / 4, -car.height / 6, car.width / 2, 5);
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(car.width / 2 - 5, -car.height / 6, 4, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 5, car.height / 6, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(-car.width / 2 + 5, -car.height / 2 - 5, 5, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 10, -car.height / 2 - 5, 5, 0, Math.PI * 2);
+            ctx.arc(-car.width / 2 + 5, car.height / 2 + 5, 5, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 10, car.height / 2 + 5, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'silver';
+            ctx.beginPath();
+            ctx.arc(-car.width / 2 + 5, -car.height / 2 - 5, 3, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 10, -car.height / 2 - 5, 3, 0, Math.PI * 2);
+            ctx.arc(-car.width / 2 + 5, car.height / 2 + 5, 3, 0, Math.PI * 2);
+            ctx.arc(car.width / 2 - 10, car.height / 2 + 5, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'gray';
+            ctx.fillRect(-car.width / 2, car.height / 2 - 5, 5, 2);
+            ctx.fillRect(-car.width / 2 + 7, car.height / 2 - 5, 5, 2);
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(-car.width / 4, -car.height / 2);
+            ctx.lineTo(-car.width / 4 - 5, -car.height / 2 - 10);
+            ctx.stroke();
+            if (car.hits === 1) { car.updateFireParticles(); car.drawFireParticles(ctx); }
+            ctx.restore();
+        }
+
+        class Car {
+            constructor(x, y, type, team) {
+                this.x = x; this.y = y; this.vx = 0; this.vy = 0; this.team = team; this.type = type; this.used = false;
+                this.hits = 0; this.canTakeDamage = true; this.explosionFrame = 0; this.scale = 1; this.fireParticles = [];
+                this.color = team === 1 ? 'yellow' : 'green';
+                switch(type) {
+                    case 'speed': this.width = 20; this.height = 40; this.mass = 0.8; this.friction = 0.97; break;
+                    case 'truck': this.width = 60; this.height = 30; this.mass = 1.5; this.friction = 0.99; break;
+                    case 'buggy': this.width = 30; this.height = 30; this.mass = 1; this.friction = 0.98; break;
+                    case 'tank': this.width = 50; this.height = 40; this.mass = 2; this.friction = 0.995; break;
+                    case 'sports': this.width = 40; this.height = 25; this.mass = 1.2; this.friction = 0.975; break;
+                }
+                this.width *= 0.8; this.height *= 0.8;
+            }
+
+            draw(ctx) {
+                if (this.hits === 2) { this.drawExplosion(ctx); return; }
+                switch(this.type) {
+                    case 'speed': drawSpeedCar(ctx, this); break;
+                    case 'truck': drawTruckCar(ctx, this); break;
+                    case 'buggy': drawBuggyCar(ctx, this); break;
+                    case 'tank': drawTankCar(ctx, this); break;
+                    case 'sports': drawSportsCar(ctx, this); break;
+                }
+            }
+
+            drawExplosion(ctx) {
+                this.explosionFrame++;
+                if (this.explosionFrame > 20) { cars = cars.filter(c => c !== this); playSound(200, 0.3); return; }
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                for (let i = 0; i < 5; i++) {
+                    const angle = (Math.PI * 2 / 5) * i + this.explosionFrame * 0.1;
+                    const size = (20 - this.explosionFrame) * Math.random() + 5;
+                    ctx.fillStyle = ['red', 'orange', 'yellow'][Math.floor(Math.random() * 3)];
+                    ctx.beginPath();
+                    ctx.arc(Math.cos(angle) * this.explosionFrame * 2, Math.sin(angle) * this.explosionFrame * 2, size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.closePath();
+                }
+                ctx.restore();
+            }
+
+            updateFireParticles() {
+                if (this.fireParticles.length < 5 && Math.random() < 0.3) {
+                    this.fireParticles.push({ x: (Math.random() - 0.5) * this.width, y: (Math.random() - 0.5) * this.height, vx: (Math.random() - 0.5) * 2, vy: (Math.random() - 0.5) * 2, life: 20 });
+                }
+                this.fireParticles.forEach(p => { p.x += p.vx; p.y += p.vy; p.life--; });
+                this.fireParticles = this.fireParticles.filter(p => p.life > 0);
+            }
+
+            drawFireParticles(ctx) {
+                ctx.fillStyle = 'red';
+                this.fireParticles.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI * 2); ctx.fill(); ctx.closePath(); });
+            }
+
+            update() {
+                if (this.hits === 2) return;
+                if (this.y < CLIFF_Y) { this.scale -= 0.05; if (this.scale <= 0) { cars = cars.filter(c => c !== this); playSound(600, 1.5); } return; }
+                this.x += this.vx; this.y += this.vy; this.vx *= this.friction; this.vy *= this.friction;
+                if (Math.abs(this.vx) < 0.1 && Math.abs(this.vy) < 0.1) { this.vx = 0; this.vy = 0; this.canTakeDamage = true; }
+                if (this.x < ROCK_WIDTH + this.width / 2) { this.x = ROCK_WIDTH + this.width / 2; this.vx = -this.vx * 0.5; }
+                if (this.x > gameCanvas.width - ROCK_WIDTH - this.width / 2) { this.x = gameCanvas.width - ROCK_WIDTH - this.width / 2; this.vx = -this.vx * 0.5; }
+                if (this.y > PLAYABLE_HEIGHT - this.height / 2) this.y = PLAYABLE_HEIGHT - this.height / 2;
+            }
+
+            getBoundingPolygon() {
+                switch(this.type) {
+                    case 'speed': return [
+                        {x: this.x - this.width / 2, y: this.y - this.height / 2}, {x: this.x + this.width / 2 - 5, y: this.y - this.height / 2},
+                        {x: this.x + this.width / 2, y: this.y - this.height / 4}, {x: this.x + this.width / 2, y: this.y + this.height / 2},
+                        {x: this.x - this.width / 2, y: this.y + this.height / 2}
+                    ];
+                    case 'truck': return [
+                        {x: this.x - this.width / 2, y: this.y - this.height / 2}, {x: this.x + this.width / 2, y: this.y - this.height / 2},
+                        {x: this.x + this.width / 2, y: this.y + this.height / 2 - 5}, {x: this.x + this.width / 2 - 10, y: this.y + this.height / 2},
+                        {x: this.x - this.width / 2, y: this.y + this.height / 2}
+                    ];
+                    case 'buggy': return [
+                        {x: this.x - this.width / 2, y: this.y - this.height / 2}, {x: this.x + this.width / 2, y: this.y - this.height / 2},
+                        {x: this.x + this.width / 2 - 5, y: this.y}, {x: this.x + this.width / 2, y: this.y + this.height / 2},
+                        {x: this.x - this.width / 2, y: this.y + this.height / 2}
+                    ];
+                    case 'tank': return [
+                        {x: this.x - this.width / 2, y: this.y - this.height / 2}, {x: this.x + this.width / 2, y: this.y - this.height / 2},
+                        {x: this.x + this.width / 2, y: this.y + this.height / 2}, {x: this.x - this.width / 2 + 5, y: this.y + this.height / 2},
+                        {x: this.x - this.width / 2, y: this.y + this.height / 2 - 5}
+                    ];
+                    case 'sports': return [
+                        {x: this.x - this.width / 2, y: this.y - this.height / 2}, {x: this.x + this.width / 2 - 10, y: this.y - this.height / 2},
+                        {x: this.x + this.width / 2, y: this.y - this.height / 4}, {x: this.x + this.width / 2, y: this.y + this.height / 2},
+                        {x: this.x - this.width / 2, y: this.y + this.height / 2}
+                    ];
+                }
+            }
+        }
+
+        class Tree {
+            constructor(x, y) { this.x = x; this.y = y; this.radius = 20; }
+            draw() {
+                gameCtx.fillStyle = 'brown';
+                gameCtx.fillRect(this.x - 5, this.y, 10, 20);
+                gameCtx.fillStyle = 'green';
+                gameCtx.beginPath();
+                gameCtx.arc(this.x, this.y - 10, this.radius, 0, Math.PI * 2);
+                gameCtx.fill();
+                gameCtx.closePath();
+            }
+        }
+
+        let cars = [];
+        const playerCars = {
+            1: [new Car(0, 0, 'speed', 1), new Car(0, 0, 'truck', 1), new Car(0, 0, 'buggy', 1), new Car(0, 0, 'tank', 1), new Car(0, 0, 'sports', 1)],
+            2: [new Car(0, 0, 'speed', 2), new Car(0, 0, 'truck', 2), new Car(0, 0, 'buggy', 2), new Car(0, 0, 'tank', 2), new Car(0, 0, 'sports', 2)]
+        };
+        let trees = [
+            new Tree(Math.random() * (canvasWidth - 2 * ROCK_WIDTH - 40) + ROCK_WIDTH + 20, Math.random() * (PLAYABLE_HEIGHT - RIVER_HEIGHT - 40) + RIVER_HEIGHT + 20),
+            new Tree(Math.random() * (canvasWidth - 2 * ROCK_WIDTH - 40) + ROCK_WIDTH + 20, Math.random() * (PLAYABLE_HEIGHT - RIVER_HEIGHT - 40) + RIVER_HEIGHT + 20)
+        ];
+        let currentPlayer = 1, selectedCar = null, aiming = false, startX, startY, endX, endY, power = 0, score = [0, 0], gameEnded = false, dragStart = null;
+
+        function polygonIntersection(poly1, poly2) {
+            for (let i = 0; i < poly1.length; i++) {
+                for (let j = 0; j < poly2.length; j++) {
+                    const p1 = poly1[i], p2 = poly1[(i + 1) % poly1.length], p3 = poly2[j], p4 = poly2[(j + 1) % poly2.length];
+                    const denom = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
+                    if (denom === 0) continue;
+                    const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / denom;
+                    const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / denom;
+                    if (t > 0 && t < 1 && u > 0 && u < 1) return true;
+                }
+            }
+            return false;
+        }
+
+        function handleCollisions() {
+            for (let i = 0; i < cars.length; i++) {
+                const c1 = cars[i];
+                if (c1.hits === 2) continue;
+                for (let tree of trees) {
+                    const dx = c1.x - tree.x, dy = c1.y - tree.y, distance = Math.sqrt(dx * dx + dy * dy);
+                    if (distance < c1.width / 2 + tree.radius) {
+                        c1.vx = -c1.vx * 0.5; c1.vy = -c1.vy * 0.5;
+                        const overlap = (c1.width / 2 + tree.radius) - distance;
+                        c1.x += overlap * (dx / distance); c1.y += overlap * (dy / distance);
+                    }
+                }
+                for (let j = i + 1; j < cars.length; j++) {
+                    const c2 = cars[j];
+                    if (c2.hits === 2 || c1.team === c2.team) continue;
+                    const poly1 = c1.getBoundingPolygon(), poly2 = c2.getBoundingPolygon();
+                    if (polygonIntersection(poly1, poly2)) {
+                        const dx = c2.x - c1.x, dy = c2.y - c1.y, distance = Math.sqrt(dx * dx + dy * dy) || 1;
+                        const nx = dx / distance, ny = dy / distance, rvx = c1.vx - c2.vx, rvy = c1.vy - c2.vy;
+                        const velocityAlongNormal = rvx * nx + rvy * ny;
+                        if (velocityAlongNormal > 0) continue;
+                        const impulse = (2 * velocityAlongNormal) / (c1.mass + c2.mass);
+                        c1.vx -= impulse * c2.mass * nx; c1.vy -= impulse * c2.mass * ny;
+                        c2.vx += impulse * c1.mass * nx; c2.vy += impulse * c1.mass * ny;
+                        const overlap = (c1.width + c2.width) / 2 - distance;
+                        if (overlap > 0) { c1.x -= overlap * nx * 0.5; c1.y -= overlap * ny * 0.5; c2.x += overlap * nx * 0.5; c2.y += overlap * ny * 0.5; }
+                        if (c1.canTakeDamage) { c1.hits++; c1.canTakeDamage = false; }
+                        if (c2.canTakeDamage) { c2.hits++; c2.canTakeDamage = false; }
+                        if (c1.hits >= 2) c1.hits = 2; if (c2.hits >= 2) c2.hits = 2;
+                    }
+                }
+            }
+        }
+
+        function calculateScore() {
+            score = [0, 0];
+            cars.forEach(car => {
+                if (car.hits < 2 && car.y > CLIFF_Y) {
+                    const distanceTraveled = START_Y - car.y;
+                    let points = Math.floor((distanceTraveled / MAX_DISTANCE) * 200);
+                    if (car.hits === 1) points = Math.floor(points / 2);
+                    score[car.team - 1] += points;
+                }
+            });
+            score1Display.textContent = score[0];
+            score2Display.textContent = score[1];
+            const hasBurning1 = cars.some(car => car.team === 1 && car.hits === 1);
+            const hasBurning2 = cars.some(car => car.team === 2 && car.hits === 1);
+            score1Display.className = hasBurning1 ? 'blink-red' : '';
+            score2Display.className = hasBurning2 ? 'blink-red' : '';
+        }
+
+        function showResult() {
+            gameEnded = true;
+            resultWindow.style.display = 'block';
+            let winner = score[0] > score[1] ? 'Player 1' : score[1] > score[0] ? 'Player 2' : 'Tie';
+            resultWindow.innerHTML = `${winner} Wins!<br>Score: ${score[0]} - ${score[1]}<br>Click to restart`;
+            resultWindow.onclick = () => {
+                resultWindow.style.display = 'none';
+                resetRound();
+                gameEnded = false;
+            };
+        }
+
+        function resetRound() {
+            cars = [];
+            currentPlayer = 1;
+            Object.values(playerCars).flat().forEach(car => car.used = false);
+            trees = [
+                new Tree(Math.random() * (canvasWidth - 2 * ROCK_WIDTH - 40) + ROCK_WIDTH + 20, Math.random() * (PLAYABLE_HEIGHT - RIVER_HEIGHT - 40) + RIVER_HEIGHT + 20),
+                new Tree(Math.random() * (canvasWidth - 2 * ROCK_WIDTH - 40) + ROCK_WIDTH + 20, Math.random() * (PLAYABLE_HEIGHT - RIVER_HEIGHT - 40) + RIVER_HEIGHT + 20)
+            ];
+            score = [0, 0];
+            selectedCar = null;
+            aiming = false;
+            powerBar.style.width = '0%';
+            startZone.style.display = isMobile ? 'block' : 'none';
+            gameEnded = false;
+        }
+
+        selCanvas.addEventListener('click', (e) => {
+            if (!selectedCar && !gameEnded) {
+                const rect = selCanvas.getBoundingClientRect();
+                const clickX = e.clientX - rect.left, clickY = e.clientY - rect.top;
+                const carList = playerCars[currentPlayer];
+                for (let car of carList) {
+                    if (!car.used && clickX > car.x - car.width / 2 && clickX < car.x + car.width / 2 && clickY > car.y - car.height / 2 && clickY < car.y + car.height / 2) {
+                        selectedCar = car;
+                        info.textContent = `Player 1: ${score[0]} | Player 2: ${score[1]} | Car: ${car.type}`;
+                        if (isMobile) {
+                            startZone.style.display = 'block';
+                            selectedCar.x = -car.width; // Скрываем за пределами до перетаскивания
+                            selectedCar.y = START_Y;
+                        } else {
+                            gameCanvas.style.cursor = `url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='), auto`; // Пустой курсор для теста
+                            drawCustomCursor(selectedCar);
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+
+        function drawCustomCursor(car) {
+            const cursorCanvas = document.createElement('canvas');
+            cursorCanvas.width = car.width * 2;
+            cursorCanvas.height = car.height * 2;
+            const cursorCtx = cursorCanvas.getContext('2d');
+            switch(car.type) {
+                case 'speed': drawSpeedCar(cursorCtx, { ...car, x: car.width, y: car.height, scale: 2 }); break;
+                case 'truck': drawTruckCar(cursorCtx, { ...car, x: car.width, y: car.height, scale: 2 }); break;
+                case 'buggy': drawBuggyCar(cursorCtx, { ...car, x: car.width, y: car.height, scale: 2 }); break;
+                case 'tank': drawTankCar(cursorCtx, { ...car, x: car.width, y: car.height, scale: 2 }); break;
+                case 'sports': drawSportsCar(cursorCtx, { ...car, x: car.width, y: car.height, scale: 2 }); break;
+            }
+            gameCanvas.style.cursor = `url(${cursorCanvas.toDataURL()}) ${car.width} ${car.height}, auto`;
+        }
+
+        gameCanvas.addEventListener('mousemove', (e) => {
+            if (selectedCar && !isMobile && !aiming) {
+                const rect = gameCanvas.getBoundingClientRect();
+                selectedCar.x = e.clientX - rect.left;
+                selectedCar.y = e.clientY - rect.top;
+                drawCustomCursor(selectedCar);
+            }
+        });
+
+        gameCanvas.addEventListener('mousedown', (e) => {
+            if (selectedCar && !aiming && !gameEnded) {
+                if (!isMobile) {
+                    const rect = gameCanvas.getBoundingClientRect();
+                    startX = Math.max(ROCK_WIDTH + selectedCar.width / 2, Math.min(e.clientX - rect.left, canvasWidth - ROCK_WIDTH - selectedCar.width / 2));
+                    startY = START_Y;
+                    selectedCar.x = startX;
+                    selectedCar.y = startY;
+                    aiming = true;
+                    power = 0;
+                } else if (dragStart === null) {
+                    dragStart = { x: e.touches ? e.touches[0].clientX : e.clientX, y: e.touches ? e.touches[0].clientY : e.clientY };
+                }
+            }
+        });
+
+        gameCanvas.addEventListener('mousemove', (e) => {
+            if (aiming && !isMobile) {
+                const rect = gameCanvas.getBoundingClientRect();
+                endX = e.clientX - rect.left;
+                endY = e.clientY - rect.top;
+                power = Math.min(Math.sqrt((endX - startX) ** 2 + (endY - startY) ** 2) / 3, 100);
+                powerBar.style.width = `${power}%`;
+            }
+        });
+
+        gameCanvas.addEventListener('mouseup', () => {
+            if (aiming && !isMobile) {
+                launchCar();
+                aiming = false;
+                selectedCar.used = true;
+                selectedCar = null;
+                gameCanvas.style.cursor = 'default';
+                currentPlayer = currentPlayer === 1 ? 2 : 1;
+                powerBar.style.width = '0%';
+            }
+        });
+
+        gameCanvas.addEventListener('touchmove', (e) => {
+            if (dragStart && isMobile) {
+                e.preventDefault();
+                const touch = e.touches[0];
+                const rect = gameCanvas.getBoundingClientRect();
+                const touchX = touch.clientX - rect.left;
+                const touchY = touch.clientY - rect.top;
+                selectedCar.x = Math.max(ROCK_WIDTH + selectedCar.width / 2, Math.min(touchX, canvasWidth - ROCK_WIDTH - selectedCar.width / 2));
+                selectedCar.y = START_Y;
+                if (touchX >= (canvasWidth * 0.375) && touchX <= (canvasWidth * 0.625)) {
+                    startZone.style.background = 'lightgreen';
+                } else {
+                    startZone.style.background = 'green';
+                }
+            } else if (aiming && isMobile) {
+                e.preventDefault();
+                const touch = e.touches[0];
+                const rect = gameCanvas.getBoundingClientRect();
+                endX = touch.clientX - rect.left;
+                endY = touch.clientY - rect.top;
+                power = Math.min(Math.sqrt((endX - startX) ** 2 + (endY - startY) ** 2) / 3, 100);
+                powerBar.style.width = `${power}%`;
+            }
+        });
+
+        gameCanvas.addEventListener('touchend', (e) => {
+            if (dragStart && isMobile) {
+                e.preventDefault();
+                const touch = e.changedTouches[0];
+                const rect = gameCanvas.getBoundingClientRect();
+                const touchX = touch.clientX - rect.left;
+                if (touchX >= (canvasWidth * 0.375) && touchX <= (canvasWidth * 0.625)) {
+                    startX = selectedCar.x;
+                    startY = START_Y;
+                    dragStart = null;
+                    startZone.style.display = 'none';
+                    aiming = true;
+                } else {
+                    selectedCar = null;
+                    dragStart = null;
+                    startZone.style.background = 'green';
+                }
+            } else if (aiming && isMobile) {
+                e.preventDefault();
+                launchCar();
+                aiming = false;
+                selectedCar.used = true;
+                selectedCar = null;
+                powerBar.style.width = '0%';
+                currentPlayer = currentPlayer === 1 ? 2 : 1;
+            }
+        });
+
+        function launchCar() {
+            const dx = endX - startX, dy = endY - startY;
+            const car = new Car(startX, startY, selectedCar.type, currentPlayer);
+            car.vx = -dx / 15 * (power / 100); car.vy = -dy / 15 * (power / 100);
+            cars.push(car);
+            playSound(500, 0.1);
+        }
+
+        function gameLoop() {
+            gameCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+            gameCtx.fillStyle = '#666'; gameCtx.fillRect(ROCK_WIDTH, CLIFF_Y, canvasWidth - 2 * ROCK_WIDTH, PLAYABLE_HEIGHT - CLIFF_Y);
+            gameCtx.fillStyle = '#444'; gameCtx.fillRect(0, PLAYABLE_HEIGHT, canvasWidth, NON_PLAYABLE_HEIGHT);
+            gameCtx.fillStyle = '#555'; gameCtx.fillRect(0, 0, ROCK_WIDTH, canvasHeight); gameCtx.fillRect(canvasWidth - ROCK_WIDTH, 0, ROCK_WIDTH, canvasHeight);
+            gameCtx.fillStyle = '#00BFFF'; gameCtx.fillRect(ROCK_WIDTH, 0, canvasWidth - 2 * ROCK_WIDTH, RIVER_HEIGHT);
+            gameCtx.fillStyle = 'white';
+            for (let i = 0; i < 10; i++) { gameCtx.beginPath(); gameCtx.arc(ROCK_WIDTH + (i + Math.random()) * 40, RIVER_HEIGHT / 2 + Math.random() * 10, 5, 0, Math.PI * 2); gameCtx.fill(); gameCtx.closePath(); }
+            trees.forEach(tree => tree.draw());
+            cars.forEach(car => { car.update(); car.draw(gameCtx); });
+            if (aiming && selectedCar) {
+                selectedCar.draw(gameCtx);
+                gameCtx.beginPath(); gameCtx.moveTo(startX, startY); gameCtx.lineTo(endX || startX, endY || startY);
+                gameCtx.strokeStyle = 'white'; gameCtx.lineWidth = 2; gameCtx.stroke(); gameCtx.closePath();
+            }
+            handleCollisions();
+            calculateScore();
+            drawSelection();
+            info.innerHTML = `Player 1: <span id="score1">${score[0]}</span> | Player 2: <span id="score2">${score[1]}</span> | ${selectedCar ? selectedCar.type : 'Select a car!'}`;
+            if (playerCars[1].every(car => car.used) && playerCars[2].every(car => car.used) && 
+                cars.every(car => car.vx === 0 && car.vy === 0 && (car.hits < 2 || car.explosionFrame >= 20))) showResult();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function drawSelection() {
+            selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+            const carList = playerCars[currentPlayer];
+            carList.forEach((car, i) => {
+                car.x = 50 + i * (canvasWidth / 5); car.y = selCanvas.height / 2; car.draw(selCtx);
+                if (car.used) {
+                    selCtx.beginPath();
+                    selCtx.moveTo(car.x - car.width / 2, car.y - car.height / 2); selCtx.lineTo(car.x + car.width / 2, car.y + car.height / 2);
+                    selCtx.moveTo(car.x + car.width / 2, car.y - car.height / 2); selCtx.lineTo(car.x - car.width / 2, car.y + car.height / 2);
+                    selCtx.strokeStyle = 'red'; selCtx.lineWidth = 5; selCtx.stroke(); selCtx.closePath();
+                }
+                selCtx.fillStyle = 'white'; selCtx.font = '12px Arial'; selCtx.fillText(car.type, car.x - 15, car.y + car.height / 2 + 15);
+            });
+        }
+
+        restartButton.addEventListener('click', () => {
+            resetRound();
+            resultWindow.style.display = 'none';
+            gameEnded = false;
+        });
+
+        gameLoop();
+    </script>
+</body>
+</html>
