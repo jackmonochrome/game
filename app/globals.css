@@ -1,0 +1,108 @@
+:root {
+  color-scheme: light dark;
+  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: #0e1016;
+  color: #f2f5ff;
+  line-height: 1.6;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, rgba(30, 64, 175, 0.35), transparent 60%),
+    linear-gradient(180deg, #08090f 0%, #121521 100%);
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 6rem;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 3rem;
+}
+
+h1, h2, h3 {
+  font-weight: 700;
+  line-height: 1.2;
+  color: #9ad4ff;
+}
+
+h1 {
+  font-size: clamp(2.5rem, 3vw + 1.5rem, 3.5rem);
+  margin-bottom: 0.25em;
+}
+
+h2 {
+  font-size: clamp(1.6rem, 1.5vw + 1.2rem, 2.2rem);
+  margin-top: 2.5rem;
+  border-left: 4px solid rgba(154, 212, 255, 0.5);
+  padding-left: 0.75rem;
+}
+
+h3 {
+  font-size: clamp(1.2rem, 1.2vw + 1rem, 1.6rem);
+  margin-top: 1.5rem;
+}
+
+section {
+  background: rgba(18, 21, 33, 0.75);
+  border: 1px solid rgba(154, 212, 255, 0.15);
+  border-radius: 16px;
+  padding: 1.75rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 25px 45px rgba(2, 8, 33, 0.45);
+  backdrop-filter: blur(12px);
+}
+
+section:nth-of-type(even) {
+  background: rgba(16, 19, 30, 0.85);
+}
+
+ul {
+  padding-left: 1.2rem;
+}
+
+li + li {
+  margin-top: 0.35rem;
+}
+
+strong {
+  color: #ffec8b;
+}
+
+.code-tag {
+  display: inline-block;
+  background: rgba(15, 23, 42, 0.7);
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  letter-spacing: 0.05em;
+  color: #9ad4ff;
+  border: 1px solid rgba(154, 212, 255, 0.25);
+  text-transform: uppercase;
+}
+
+.footer {
+  text-align: center;
+  margin-top: 4rem;
+  font-size: 0.9rem;
+  color: rgba(242, 245, 255, 0.65);
+}
+
+@media (max-width: 640px) {
+  main {
+    padding: 2.5rem 1rem 4rem;
+  }
+
+  section {
+    padding: 1.5rem;
+  }
+}
